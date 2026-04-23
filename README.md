@@ -1,9 +1,8 @@
 # up317
-Code for my final project surrounding economic impacts of housing age in Chicago
 
 # UP 317 Final Project: Spatial Autocorrelation Analysis
 
-**Author:** Your Name  
+**Author:** Matthew Bastianen 
 **Date:** Spring 2026  
 **Course:** UP 317 - Introduction to Urban Data Science
 
