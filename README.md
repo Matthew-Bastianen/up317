@@ -28,7 +28,8 @@ American Community Survey 5-Year Estimates, (2019-2024). http://api.census.gov/d
 
 UP317-Final-Project/
 ├── README.md                 # This file
-├── do_bastianen.rmd          # The code
+├── do_bastianen.rmd          # The script
+├── Final.odt                 # Expanded paper and conclusions
 
 ## How to Reproduce
 
