@@ -13,6 +13,7 @@ How does Chicago maintain affordability where other large cities have suffered?
 ## Data Sources
 
 U.S. Census Bureau. (2026).
+
 American Community Survey 5-Year Estimates, (2019-2024). http://api.census.gov/data/2024/acs/acs5​
 
 
