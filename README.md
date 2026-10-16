@@ -51,7 +51,7 @@ affordability.
 ## Dependencies
 
 - R version 4.x
-- Packages: sf, spdep, tidyverse, tmap
+- Packages: tidyverse, tidycensus, sf, tmap, tigris, tidyr, viridis, spdep, and knitr.
 
 ## Contact
 
