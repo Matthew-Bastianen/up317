@@ -1,0 +1,902 @@
+---
+title: 'Detailed Outline'
+author: "Matthew Bastianen"
+date: 'Due: Tuesday, April 21, 2026 at 11:59 PM'
+output: pdf_document
+subtitle: 'UP 317: Introduction to Urban Data Science'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE, error = FALSE, message=FALSE)
+
+# Notice that no output of code/results/warnings/errors are shown given the conditions above.
+# You can tweak that within each chunk of code within the curly brackets: ```{r }
+```
+
+```{r code, include=FALSE, echo=FALSE}
+
+library(tidycensus)
+library(tidyverse)
+library(sf)
+library(tmap)
+library(tigris)
+library(tidyr)
+library(viridis) 
+library(spdep)
+library(knitr)
+
+#this is from a9
+
+# B25034 is housing by decade, B25035 is housing by Median year built
+
+chi_house <- get_acs(
+  geography = "tract",
+  table = "B25035",
+  state = "IL",
+  county = "Cook",
+  year = 2024,
+  survey = "acs5",
+  geometry = TRUE
+)
+options(tigris_use_cache = TRUE)
+
+
+chi_boundary <- tigris::places(state = "IL", year = 2024) %>%
+  filter(NAME == "Chicago")
+
+chi_house <- st_intersection(chi_house, chi_boundary)
+
+chi_house <- st_transform(chi_house, 3435)  # UTM Zone 16N
+
+tmap_mode("plot")
+
+```
+
+``` {r queen, echo=FALSE}
+
+library(spdep)
+
+# Create neighbor list - Queen contiguity
+nb_queen <- poly2nb(chi_house, queen = TRUE)
+
+
+#Average links 6.48, minimum is 1, max is 18
+
+
+```
+
+``` {r rook, echo=FALSE}
+nb_rook <- poly2nb(chi_house, queen = FALSE)
+
+
+# average is 4.65, minimum is 1, max is 16
+
+
+```
+
+``` {r distance, echo=FALSE}
+
+# Get centroids
+coords <- st_coordinates(st_centroid(chi_house))
+
+
+# Calculate all pairwise distances
+k1 <- knn2nb(knearneigh(coords, k = 1))
+critical_threshold <- max(unlist(nbdists(k1, coords)))
+
+
+# All neighbors within 2 mi: 10560 feet
+nb_2mi <- dnearneigh(coords, 0, 10560)
+
+
+
+```
+
+``` {r knear, echo=FALSE}
+
+# Find 5 nearest neighbors for each municipality
+knn5 <- knn2nb(knearneigh(coords, k = 5))
+
+
+
+
+```
+
+``` {r check, include=FALSE}
+chi_check <- chi_house %>%
+   filter(variable == "B25035_001") %>%
+  select(GEOID, estimate, moe) %>%
+  st_drop_geometry() %>%
+  mutate(
+    se_age = moe / 1.645,
+    cv_age = ifelse(estimate == 0, NA, (se_age / estimate) * 100)
+  )
+
+# How many tracts fall into each reliability category?
+chi_check %>%
+  st_drop_geometry() %>%
+  mutate(
+    reliability = case_when(
+      is.na(cv_age)   ~ "Missing",
+      cv_age < 12     ~ "Reliable (CV < 12%)",
+      cv_age < 40     ~ "Use with caution (CV 12-40%)",
+      TRUE               ~ "Unreliable (CV > 40%)"
+    )
+  ) %>%
+  count(reliability) %>%
+  mutate(pct = round(100 * n / sum(n), 1))
+
+```
+
+# 1. Research Question and Study Area
+
+Chicago is an large city. Unlike other large cities, however, it has avoided the worst of the recent cost of living crisis, with a cost only 18% higher than the national average (Cost of Living in Chicago, IL, 2025). Compared to NYC at 139% higher (Cost of Living in New York, NY, 2025) and LA at 52% higher (Cost of Living in Los Angeles, California, 2025), this is remarkably low. This is largely because of the slower growth in rent across the city. This is anecdotally credited to the oldest housing in Chicago - 2-3 story stone flats, built in the 1930s - which have proven to be extremely long-lasting and reliable forms of housing.
+This begs the question: has the preservation of older housing really resulted in positive economic effects for the city? Are the flats still valuable nearly a century after they were built? How does the age of housing affect economic factors in Chicago?
+My research question has evolved since milestone 1, in that I have decided to exclusively prioritize economic effects. I think this focus results in a more poignant and focused discussion, avoiding the problems I had early on with loss of focus or questions about the utility of the research. 
+
+# 2. Data Summary
+
+
+I utilized 5-year ACS estimates from 2019-2024 to capture the modern rent hike while avoiding COVID specific abnormalities and improve reliability of data. I utilized tables B25034, which counts housing by decade, B25035, which shows the median age of housing, and B25111, which shows the average rent by age of housing, grouped by decade. I filtered Cook County data to just Chicago and standardized the weight indices. There are 862 Census tracts in my final dataset. Only 2/3 had marked MOEs for Median Age, but all listed were reliable. 
+
+# 3. Spatial Weights Specification
+
+I utilized the Queen weights for this analysis. Chicago has no spatial islands, so Queen weights are appropriate. Housing age also has localized effects, so prioritizing those closest is advantageous. I did test with Rook, 2 mile distance, and 5-nearest neighbors for robustness where appropriate.  
+
+``` {r summary, echo=FALSE}
+
+#this is from a9
+# Row-standardized weights (style = "W")
+listw_queen <- nb2listw(nb_queen, style = "W", zero.policy = TRUE)
+listw_rook <- nb2listw(nb_rook, style = "W", zero.policy = TRUE)
+listw_2mi <- nb2listw(nb_2mi, style = "W")
+listw_knn5 <- nb2listw(knn5, style = "W")
+
+
+
+n <- length(nb_queen)  # same n for all
+
+weights_comparison <- tibble(
+  weight_type = c("Queen Contiguity", "Rook Contiguity", 
+                  "2mi Distance", "5-Nearest Neighbors"),
+  
+  avg_neighbors = c(
+    mean(card(nb_queen)),
+    mean(card(nb_rook)),
+    mean(card(nb_2mi)),
+    5
+  ),
+  
+  min_neighbors = c(
+    min(card(nb_queen)),
+    min(card(nb_rook)),
+    min(card(nb_2mi)),
+    5
+  ),
+  
+  max_neighbors = c(
+    max(card(nb_queen)),
+    max(card(nb_rook)),
+    max(card(nb_2mi)),
+    5
+  ),
+  
+  is_symmetric = c(
+    is.symmetric.nb(nb_queen),
+    is.symmetric.nb(nb_rook),
+    is.symmetric.nb(nb_2mi),
+    is.symmetric.nb(knn5)
+  ),
+  
+  S1 = c(
+    summary(listw_queen)$S1,
+    summary(listw_rook)$S1,
+    summary(listw_2mi)$S1,
+    summary(listw_knn5)$S1
+  ),
+  
+  S2 = c(
+    summary(listw_queen)$S2,
+    summary(listw_rook)$S2,
+    summary(listw_2mi)$S2,
+    summary(listw_knn5)$S2
+  ),
+  
+pct_nonzero = c(
+  mean(card(nb_queen) > 0),
+  mean(card(nb_rook) > 0),
+  mean(card(nb_2mi) > 0),
+  mean(card(knn5) > 0)
+) * 100
+)
+
+kable(weights_comparison, digits = 2,
+      col.names = c("Weight Type", "Mean Neighbors", "Min Neighbors", 
+                    "Max Neighbors", "Symmetric", "% Nonzero"))
+
+
+```
+
+
+``` {r queen_connect, fig.width=15, fig.height=15, echo=FALSE}
+
+par(mfrow = c(2, 2), mar = c(1,1,2,1))
+
+# 1. Queen
+invisible({
+  plot(st_geometry(chi_house), border = "gray", main = "Queen Contiguity")
+  plot(nb_queen, coords = coords, add = TRUE, col = rgb(0, 0, 1, 0.4), lwd = 0.5)
+})
+
+```
+
+
+# 4. Analytical Methods and Results
+
+
+# A. Exploratory Data Analysis:
+
+My earliest data analysis revealed that there was, in fact, something worth researching. The bar graphs below show that Cook County (which Chicago makes the majority of) has significant amounts of pre-1939 housing. This reveals that the anecdotes have truth to them. The largest outlier is a tract on the north side with a median age of 2014. The second bar graph proves that older housing does have lower rent, though the effect is similar for all housing before 2000. Both scatter plots prove that despite having lower rents, the presence of older housing alone isnt enough to decrease the percentage of rent burdened households. This means that those needing lower rent naturally filter into the lower rent areas, and those areas are older, resulting in no statistical difference in rent burdened households.
+
+``` {r EDA}
+
+chi_rent <- get_acs(
+  geography = "county",
+  table = "B25111",
+  state = "IL",
+  county = "Cook",
+  year = 2024,
+  survey = "acs5"
+)
+options(tigris_use_cache = TRUE)
+
+
+#this was created for the DO
+
+chi_rent <- chi_rent %>%
+  mutate(
+    rent_category = case_when(
+      variable == "B25111_001" ~ "Total",
+      variable == "B25111_002" ~ "Built 2020 or later",
+      variable == "B25111_003" ~ "Built 2010 to 2019",
+      variable == "B25111_004" ~ "Built 2000 to 2009",
+      variable == "B25111_005" ~ "Built 1990 to 1999",
+      variable == "B25111_006" ~ "Built 1980 to 1989",
+      variable == "B25111_007" ~ "Built 1970 to 1979",
+      variable == "B25111_008" ~ "Built 1960 to 1969",
+      variable == "B25111_009" ~ "Built 1950 to 1959",
+      variable == "B25111_010" ~ "Built 1940 to 1949",
+      variable == "B25111_011" ~ "Built 1939 or earlier"
+    ),
+    
+    rent_category = factor(
+      rent_category,
+      levels = c(
+        "Total",
+        "Built 2020 or later",
+        "Built 2010 to 2019",
+        "Built 2000 to 2009",
+        "Built 1990 to 1999",
+        "Built 1980 to 1989",
+        "Built 1970 to 1979",
+        "Built 1960 to 1969",
+        "Built 1950 to 1959",
+        "Built 1940 to 1949",
+        "Built 1939 or earlier"
+      )
+    )
+  )
+
+
+ggplot(chi_rent, aes(x = rent_category, y = estimate)) +
+  geom_col(fill = "#13294B") +
+  coord_flip() +
+  labs(
+    title = "Rent by Year Built (Cook County)",
+    x = "Year Built",
+    y = "Median Gross Rent ($/month)"
+  ) +
+  theme_minimal()
+
+chi_year <- get_acs(
+  geography = "county",
+  table = "B25034",
+  state = "IL",
+  county = "Cook",
+  year = 2024,
+  survey = "acs5"
+)
+
+# Need to create histogram with 11 boxes for this result
+
+chi_year <- chi_year %>%
+   filter(variable != "B25034_001") %>%
+  mutate(
+    year_category = case_when(
+      variable == "B25034_002" ~ "Built 2020 or later",
+      variable == "B25034_003" ~ "Built 2010 to 2019",
+      variable == "B25034_004" ~ "Built 2000 to 2009",
+      variable == "B25034_005" ~ "Built 1990 to 1999",
+      variable == "B25034_006" ~ "Built 1980 to 1989",
+      variable == "B25034_007" ~ "Built 1970 to 1979",
+      variable == "B25034_008" ~ "Built 1960 to 1969",
+      variable == "B25034_009" ~ "Built 1950 to 1959",
+      variable == "B25034_010" ~ "Built 1940 to 1949",
+      variable == "B25034_011" ~ "Built 1939 or earlier"
+    ),
+    
+    year_category = factor(
+      year_category,
+      levels = c(
+        "Built 2020 or later",
+        "Built 2010 to 2019",
+        "Built 2000 to 2009",
+        "Built 1990 to 1999",
+        "Built 1980 to 1989",
+        "Built 1970 to 1979",
+        "Built 1960 to 1969",
+        "Built 1950 to 1959",
+        "Built 1940 to 1949",
+        "Built 1939 or earlier"
+      )
+    )
+  )
+
+options(scipen = 999)
+
+ggplot(chi_year, aes(x = year_category, y = estimate)) +
+  geom_col(fill = "#13294B") +
+  coord_flip() +
+  labs(
+    title = "Structure by Year Built (Cook County)",
+    x = "Year Built",
+    y = "Number of Structures"
+  ) +
+  theme_minimal()
+
+
+```
+
+``` {R Exploring Relationships, echo = FALSE, warning=FALSE, error = FALSE}
+
+# **B01003**: Total Population
+# **B19013**: Median Household Income
+# **B17001**: Poverty Status
+# **B25064**: Median Gross Rent
+# **B25077**: Median Home Value
+# **B15003**: Educational Attainment
+#  B25070: income towards rent (S2503 table)
+
+vars <- c(
+  housing_age = "B25035_001",
+  unemployed = "B23025_005",
+  renters = "B25070_001",
+  above_rent = "B25070_010",
+  population = "B17001_001",
+  poverty = "B17001_002",
+  med_val = "B25077_001"
+)
+
+chi_data <- get_acs(
+  geography = "tract",
+  variables = vars,
+  state = "IL",
+  county = "Cook",
+  year = 2024,
+  survey = "acs5",
+  geometry = TRUE,
+  output = "wide"
+)
+
+chi_data <- chi_data %>%
+  mutate(
+    pct_above = ifelse(rentersE == 0, NA, (above_rentE / rentersE) * 100),
+    pct_pov = (povertyE / populationE)*100
+  )
+
+
+age_med  <- median(chi_data$housing_ageE, na.rm = TRUE)
+rent_med <- median(chi_data$pct_above, na.rm = TRUE)
+
+#all this is from the descriptive analysis. I cut a lot of it. 
+chi_data <- chi_data %>%
+  mutate(
+    high_age  = housing_ageE < age_med,
+    high_rent = pct_above > rent_med,
+    category = case_when(
+      high_age & high_rent ~ "High Housing Age, High Rent Burden",
+      high_age & !high_rent ~ "High Housing Age, Low Rent Burden",
+      !high_age & high_rent ~ "Low Housing Age, High Rent Burden",
+      TRUE ~ "Low Housing Age & Low Rent Burden"
+    )
+  )
+
+ggplot(chi_data, aes(x = housing_ageE, y = pct_above)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", color = "red") +
+  labs(
+    x = "Median Housing Age",
+    y = "Percent Extremely Rent Burdened",
+    title = "Housing Age vs Extreme Rent Burden in Chicago Census Tracts (ACS 2024)"
+  )
+
+```
+
+``` {r poverty1, include=FALSE}
+
+cor.test(
+  chi_data$housing_ageE,
+  chi_data$pct_pov,
+  use = "complete.obs",
+  method = "pearson"
+)
+
+cor.test(
+  chi_data$housing_ageE,
+  chi_data$pct_above,
+  use = "complete.obs",
+  method = "pearson"
+)
+
+
+```
+
+``` {r poverty2}
+
+ggplot(chi_data, aes(x = housing_ageE, y = pct_pov)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", color = "red") +
+  labs(
+    x = "Median Housing Age",
+    y = "Percent in Poverty",
+    title = "Housing Age vs Percent Poverty in Chicago Census Tracts (ACS 2024)"
+  )
+
+```
+``` {r value1, include=FALSE}
+
+cor.test(
+  chi_data$housing_ageE,
+  chi_data$med_valE,
+  use = "complete.obs",
+  method = "pearson"
+)
+```
+
+
+``` {r value2}
+
+ggplot(chi_data, aes(x = housing_ageE, y = med_valE)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", color = "red") +
+  labs(
+    x = "Median Housing Age",
+    y = "Median Home Value",
+    title = "Housing Age vs Median Home Value in Chicago Census Tracts (ACS 2024)"
+  )
+
+```
+
+
+
+# B. Geovisualization
+
+
+My maps show a clear "collar" formation around the urban core. In every map, there was a clear and significant decrease in age as the urban core neared, with the oldest housing in the areas between the city edge and center. This provides significant evidence for heterogeneity, reinforced in future sections. 
+
+``` {r map 1940, echo=FALSE}
+
+chi_25034 <- get_acs(
+  geography = "tract",
+  table = "B25034",
+  state = "IL",
+  county = "Cook",
+  year = 2024,
+  survey = "acs5",
+  geometry = TRUE
+)
+options(tigris_use_cache = TRUE)
+
+
+chi_boundary <- tigris::places(state = "IL", year = 2024) %>%
+  filter(NAME == "Chicago")
+
+#this is from DA. 
+
+chi_25034 <- st_intersection(chi_25034, chi_boundary)
+
+chi_pre1940 <- chi_25034 %>%
+  select(GEOID, variable, estimate, geometry) %>%
+  tidyr::pivot_wider(names_from = variable, values_from = estimate) %>%
+  mutate(
+    pct_pre1940 = B25034_011 / B25034_001
+  )
+
+ggplot(chi_pre1940) +
+  geom_sf(aes(fill = pct_pre1940)) +
+  scale_fill_viridis_c(
+    labels = scales::percent,
+    name = "% built before 1940"
+  ) +
+  theme_minimal()
+```
+
+``` {r figure2}
+tm_shape(chi_house) +
+  tm_polygons(
+    "estimate",
+    style = "jenks",
+    n = 5,
+    palette = "Blues",
+    legend.format = list(big.mark = ""),
+    title = "Median Structure Year"
+  )
+
+```
+
+
+
+# C. Global Spatial Autocorrelation:
+
+
+The Morans I of 0.58 proves substantial spatial autocorrelation within the dataset of median structure age, with a p of ~0 and a variance of ~0. The permutation test visualization further reinforces this conclusion. The weight specification all but confirms it, as this result is robust across different spatial weights. We reject the null hypothesis of spatial randomness - there is spatial autcorrelation within this dataset. The majority of data falls within the LL quadrant, with HH and HL in a distant second and third respectively.This reinforces previous findings about the age of Chicago's housing - for the majority of the dataset, housing is old. 
+
+``` {r startup, include=FALSE}
+
+chi_house <- get_acs(
+  geography = "tract",
+  table = "B25035",
+  state = "IL",
+  county = "Cook",
+  year = 2024,
+  survey = "acs5",
+  geometry = TRUE
+) %>%
+  filter(!is.na(estimate))
+options(tigris_use_cache = TRUE) 
+# THIS is from a10. dont ask me why I have to redo all of this api. if I dont the sections below dont run :|
+
+chi_boundary <- tigris::places(state = "IL", year = 2024) %>%
+  filter(NAME == "Chicago")
+#filter to chicago only, not cook county
+
+chi_house <- st_intersection(chi_house, chi_boundary)
+
+chi_house <- st_transform(chi_house, 3435)  # UTM Zone 16N
+
+nb_queen <- poly2nb(chi_house, queen = TRUE)
+listw_queen <- nb2listw(nb_queen, style = "W", zero.policy = TRUE)
+
+nb_rook <- poly2nb(chi_house, queen = FALSE)
+listw_rook <- nb2listw(nb_rook, style = "W", zero.policy = TRUE)
+
+coords <- st_coordinates(st_centroid(chi_house))
+nb_2mi <- dnearneigh(coords, 0, 10560)
+listw_2mi <- nb2listw(nb_2mi, style = "W")
+
+knn5 <- knn2nb(knearneigh(coords, k = 5))
+listw_knn5 <- nb2listw(knn5, style = "W")
+
+
+```
+
+
+
+``` {r moran, include=FALSE}
+
+moran_test_pov <- moran.test(chi_house$estimate, listw_queen)
+
+print(moran_test_pov)
+
+observed_I <- moran_test_pov$estimate["Moran I statistic"]
+expected_I <- moran_test_pov$estimate["Expectation"]
+p_value <- moran_test_pov$p.value
+
+
+```
+
+
+``` {r monte carlo}
+
+set.seed(123456789)  # For reproducibility
+moran_mc <- moran.mc(chi_house$estimate, listw_queen, nsim = 999)
+
+#yay monte carlo!
+plot(moran_mc, 
+     main = "Permutation Test for Moran's I",
+     xlab = "Simulated Moran's I (under spatial randomness)",
+     ylab = "Frequency")
+
+```
+
+
+``` {r scatterplot}
+
+ppov_std <- as.numeric(scale(chi_house$estimate)) # Standardize
+
+# Calculate spatial lag (weighted average of neighbors)
+ppov_lag <- lag.listw(listw_queen, ppov_std)
+
+moran.plot(ppov_std, listw_queen,
+           xlab = "Median Housing Age (standardized)",
+           ylab = "Spatially Lagged Housing Age",
+           main = "Moran Scatterplot: Housing Age 2024",
+           labels = FALSE)
+
+
+```
+
+
+``` {r quad count, include=FALSE}
+
+chi_house <- chi_house %>%
+  mutate(
+    ppov_std = as.numeric(ppov_std),
+    ppov_lag = as.numeric(ppov_lag),
+    
+    # Classify quadrant
+    quadrant = case_when(
+      ppov_std > 0 & ppov_lag > 0 ~ "HH",
+      ppov_std < 0 & ppov_lag < 0 ~ "LL",
+      ppov_std > 0 & ppov_lag < 0 ~ "HL",
+      ppov_std < 0 & ppov_lag > 0 ~ "LH"
+    )
+  )
+
+# Count municipalities in each quadrant
+table(chi_house$quadrant)
+
+```
+
+
+``` {r sensitivity}
+
+# Moran's I with Queen weights (already done)
+I_queen <- moran.test(chi_house$estimate, listw_queen)$estimate["Moran I statistic"]
+
+# Moran's I with Rook weights
+I_rook <- moran.test(chi_house$estimate, listw_rook)$estimate["Moran I statistic"]
+
+# Moran's I with 20km distance weights
+I_2mi <- moran.test(chi_house$estimate, listw_2mi)$estimate["Moran I statistic"]
+
+# Moran's I with 5-nearest neighbors
+I_knn5 <- moran.test(chi_house$estimate, listw_knn5)$estimate["Moran I statistic"]
+
+# P-values
+p_queen <- moran.test(chi_house$estimate, listw_queen)$p.value
+p_rook <- moran.test(chi_house$estimate, listw_rook)$p.value
+p_2mi <- moran.test(chi_house$estimate, listw_2mi)$p.value
+p_knn5 <- moran.test(chi_house$estimate, listw_knn5)$p.value
+
+# Summary table
+sensitivity_table <- tibble(
+  weights = c("Queen Contiguity", "Rook Contiguity", 
+              "2mi Distance", "5-Nearest Neighbors"),
+  moran_I = c(I_queen, I_rook, I_2mi, I_knn5),
+  p_value = c(p_queen, p_rook, p_2mi, p_knn5),
+  significant = ifelse(p_value < 0.05, "Yes", "No")
+)
+
+kable(sensitivity_table, digits = 4,
+      col.names = c("Weight Specification", "Moran's I", "P-value", "Significant?"))
+
+```
+
+# D. Local Spatial Autocorrelation
+
+The high-high clusters are focused on the immediate urban core, spreading in all directions except the southwest. The urban core is the center of all modern development, and so would be expected to contain the majority of newer developments, raising the median. The low-high outliers also concentrate in this area and exemplify the richer but historically important neighborhoods that have resisted new development. 
+The LISA reveals there are two main low-low clusters – one on the southwest side and another on the northwest side. The Northwest cluster lies roughly between Humbolt Park and Irving Park, while the Southwest cluster centers around Mckinley Park. The high-low outliers exist within and around these two clusters.
+Restricting the P-value leads to the elimination of the low-low clusters entirely, suggesting they are less significant than the high-high concentration in the urban core. The Southwest low-low cluster persists at p>0.01, suggesting it is the more significant of the two clusters.
+
+```{r local-moran, , include=FALSE}
+# Compute Local Moran's I for each municipality
+local_moran <- localmoran(chi_house$estimate, listw_queen)
+#this is from a11 
+
+# **Output columns:**
+
+# - **Ii:** Local Moran's I value for municipality i
+#- **E.Ii:** Expected value of Ii under randomness
+#- **Var.Ii:** Variance of Ii
+#- **Z.Ii:** Z-score (standardized)
+#- **Pr(z != E(Ii)):** P-value (two-tailed test)
+
+chi_house <- chi_house %>%
+  mutate(
+    local_I = local_moran[, "Ii"],           # Local I value
+    local_I_z = local_moran[, "Z.Ii"],       # Z-score
+    local_p = local_moran[, "Pr(z != E(Ii))"], # P-value
+    significant_05 = local_p < 0.05,         # Significant at 5%?
+    significant_01 = local_p < 0.01,         # Significant at 1%?
+    significant_001 = local_p < 0.001        # Significant at 0.1%?
+  )
+
+# 194, 95, 70
+
+```
+
+``` {r classify, include=FALSE}
+
+hos_std <- as.numeric(scale(chi_house$estimate)) # Standardize
+
+# Calculate spatial lag (weighted average of neighbors)
+hos_lag <- lag.listw(listw_queen, hos_std)
+
+chi_house <- chi_house %>%
+  mutate(
+    hos_std = as.numeric(hos_std),
+    hos_lag = as.numeric(hos_lag)
+  )
+
+
+
+```
+
+
+```{r classify-clusters, include=FALSE}
+chi_house <- chi_house %>%
+  mutate(
+    # Classify quadrant
+    cluster_type_all = case_when(
+      hos_std > 0 & hos_lag > 0 ~ "High-High",
+      hos_std < 0 & hos_lag < 0 ~ "Low-Low",
+      hos_std > 0 & hos_lag < 0 ~ "High-Low",
+      hos_std < 0 & hos_lag > 0 ~ "Low-High"
+    ),
+    
+    # Only show if significant at p < 0.05
+    cluster_type = ifelse(significant_05, cluster_type_all, "Not Significant")
+  )
+
+# Count by type
+
+
+table(chi_house$cluster_type)
+```
+
+
+```{r lisa-map-basic, fig.width=8, fig.height=9.4}
+# Basic cluster map
+tm_shape(chi_house) +
+  tm_fill("cluster_type",
+          palette = c("Not Significant" = "gray90",
+                      "High-High" = "red",
+                      "Low-Low" = "blue",
+                      "High-Low" = "pink",
+                      "Low-High" = "lightblue"),
+          title = "LISA Clusters\n(p < 0.05)") +
+  tm_borders(col = "white", lwd = 0.5) +
+  tm_layout(
+    main.title = "Spatial Clustering of Housing Age in Chicago (ACS 2024)",
+    legend.outside = TRUE
+  )
+```
+```{r sensitivity-pvalue}
+# Create cluster classification at different p-values
+chi_house <- chi_house %>%
+  mutate(
+    cluster_p05 = ifelse(significant_05, cluster_type_all, "Not Sig"),
+    cluster_p01 = ifelse(significant_01, cluster_type_all, "Not Sig"),
+    cluster_p001 = ifelse(significant_001, cluster_type_all, "Not Sig")
+  )
+
+# Count at each threshold
+sensitivity_counts <- tibble(
+  threshold = c("p < 0.05", "p < 0.01", "p < 0.001"),
+  n_significant = c(
+    sum(chi_house$significant_05, na.rm=TRUE),
+    sum(chi_house$significant_01, na.rm=TRUE),
+    sum(chi_house$significant_001, na.rm=TRUE)
+  ),
+  pct_significant = 100 * n_significant / nrow(chi_house)
+)
+
+kable(sensitivity_counts,
+      digits = 1,
+      col.names = c("Significance Threshold", "# Significant", "% Significant"))
+```
+
+### P-Value Sensitivity Maps
+
+```{r sensitivity-maps}
+# Map at p < 0.05
+map_05 <- tm_shape(chi_house) +
+  tm_fill("cluster_p05",
+          palette = c("Not Sig" = "gray90",
+                      "High-High" = "red",
+                      "Low-Low" = "blue",
+                      "High-Low" = "pink",
+                      "Low-High" = "lightblue"),
+          title = "p < 0.05") +
+  tm_borders(col = "white", lwd = 0.3)
+
+# Map at p < 0.01
+map_01 <- tm_shape(chi_house) +
+  tm_fill("cluster_p01",
+          palette = c("Not Sig" = "gray90",
+                      "High-High" = "red",
+                      "Low-Low" = "blue",
+                      "High-Low" = "pink",
+                      "Low-High" = "lightblue"),
+          title = "p < 0.01") +
+  tm_borders(col = "white", lwd = 0.3)
+
+# Map at p < 0.001
+map_001 <- tm_shape(chi_house) +
+  tm_fill("cluster_p001",
+          palette = c("Not Sig" = "gray90",
+                      "High-High" = "red",
+                      "Low-Low" = "blue",
+                      "High-Low" = "pink",
+                      "Low-High" = "lightblue"),
+          title = "p < 0.001") +
+  tm_borders(col = "white", lwd = 0.3)
+
+# fixing legend
+levels_all <- c("Not Sig", "High-High", "Low-Low", "High-Low", "Low-High")
+
+
+# Display side by side
+tmap_arrange(map_05, map_01, map_001, ncol = 3)
+
+
+```
+
+
+```{r sensitivity-weights}
+# Calculate LISA with different weights
+local_queen <- localmoran(chi_house$estimate, listw_queen)
+local_rook <- localmoran(chi_house$estimate, listw_rook)
+local_2mi <- localmoran(chi_house$estimate, listw_2mi)
+
+# Add p-values to data
+chi_house <- chi_house %>%
+  mutate(
+    p_queen = local_queen[, "Pr(z != E(Ii))"],
+    p_rook = local_rook[, "Pr(z != E(Ii))"],
+    p_2mi = local_2mi[, "Pr(z != E(Ii))"],
+    
+    # Significant with each weight?
+    sig_queen = p_queen < 0.05,
+    sig_rook = p_rook < 0.05,
+    sig_2mi = p_2mi < 0.05,
+    
+    # Significant with ALL weights?
+    sig_all_weights = sig_queen & sig_rook & sig_2mi
+  )
+
+# How many are robust across weights?
+invisible({
+  cat("Significant with Queen:", sum(chi_house$sig_queen,na.rm = TRUE), "\n")
+  cat("Significant with Rook:", sum(chi_house$sig_rook, na.rm = TRUE), "\n")
+  cat("Significant with 2 mi:", sum(chi_house$sig_2mi, na.rm = TRUE), "\n")
+  cat("Significant with ALL three:", sum(chi_house$sig_all_weights, na.rm = TRUE), "\n")
+})
+
+```
+
+
+
+# 5. Preliminary Findings:
+
+My results prove that there is substantial old housing present in Chicago, as the anecdotes suggest. It follows the expected patterns of new development, where the oldest housing appears in a collar around the intensely developed downtown. It also establishes that the spatial clustering of housing ages is statistically significant, and persists across various weight and reliability checks. It is surprising that despite having lower rents, there is no statistical improvement in rent burden in older houses.This result, and the extremely high percentage of old housing calls for an inter-urban analysis, rather than the intra-urban one performed here. The policy implication of this report is that development in this "collar" should be careful to avoid gentrification. Affordable housing or denser housing can be justified to remove older housing, but other projects should face higher scrutiny. 
+
+
+# 6. Remaining Work
+
+Most of what I need to do is writing, but I think some additional EDA analysis could be beneficial. In particular, correlating housing age with more variables contained within the census, such as poverty or median home value. My visualizations have improved significantly through this process, but I think refining their number and really being particular about which to include and which to simply discuss would be useful. I also think a case study of tract 6103, the only spatially LL at P>0.01 would be worthwhile. It could exemplify what the lack of new housing development results in. 
+
+
+
+### Works Cited
+
+
+Cost of Living in Chicago, IL | PayScale. (2025). Retrieved April 26, 2026, from https://www.payscale.com/cost-of-living-calculator/Illinois-Chicago
+
+Cost of Living in Los Angeles, CA | PayScale. (2025). Retrieved April 26, 2026, from https://www.payscale.com/cost-of-living-calculator/California-Los-Angeles
+
+Cost of Living in New York, NY | PayScale. (2025). Retrieved April 26, 2026, from https://www.payscale.com/cost-of-living-calculator/New-York-New-York
+
+
+
