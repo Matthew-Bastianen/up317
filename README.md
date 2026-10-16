@@ -8,12 +8,13 @@
 
 ## Research Question
 
-Does housing exhibit spatial clustering in Mexico City municipalities?
+How does Chicago maintain affordability where other large cities have suffered?
 
 ## Data Sources
 
-- **Geographic data:** Mexico City municipality shapefile (INEGI)
-- **Housing:** 
+U.S. Census Bureau. (2026).
+American Community Survey 5-Year Estimates, (2019-2024). http://api.census.gov/data/2024/acs/acs5​
+
 
 ## Methods
 
@@ -27,25 +28,20 @@ Does housing exhibit spatial clustering in Mexico City municipalities?
 
 UP317-Final-Project/
 ├── README.md                 # This file
-├── data/
-│   ├── raw/                  # Original data (never edit!)
-│   └── processed/            # Cleaned data
-├── src/                     # Numbered R scripts
-├── output/
-│   ├── figures/              # Maps and plots
-│   └── tables/               # Results tables
-└── paper/                    # Final paper
+├── do_bastianen.rmd          # The code
 
 ## How to Reproduce
 
-1. Place raw data in `data/raw/`
-2. Run scripts in `src/` in numbered order
-3. Output saves to `output/`
-4. Figures and tables are incorporated into paper in `paper/`
+1. Place script file in RStudio
+2. Run scripts in numbered order
+3. (Optional) Save figures from RStudio
 
 ## Key Findings
 
-[To be added after analysis]
+These results prove housing age has statistically
+significant effects on economic affordability. Preserving
+older housing does have an economic incentive for
+affordability.
 
 ## Dependencies
 
